@@ -4,7 +4,6 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -14,101 +13,104 @@ import java.util.TreeMap;
 
 public class Main {
 
-	static int dim;
-	static ArrayList<Event> events;
+	static int dim;						// stores the dimension of the space we're working in. The examples from class are in 1 
+	static ArrayList<Event> events;		// stores all the events from in the input file, in increasing chronological time
+	static HashSet<Event> toPush;		// stores all of the events that need to be pushed down the possibility hash. Saves us from computing the same thing repeatedly
 	static HashMap<Event, Event> path;  // if there is a known path to the end from an event, the next event to be observed is stored here
 	static HashMap<Event, Integer> possible;  // records the current maximum number of possible events that each event can observe after itself (even if the path is not known)
 	static TreeMap<Integer, HashSet<Event>> possibleInverse;  // a reverse hash of possible
 
 	public static void main( String[] args ) throws Exception {
-		writeInput( "inputrand", 100000, 100, 3 );
+		writeInput( "inputrand", 10000, 100, 1 );
 		readInput( "inputrand" );
 		pruneEvents();
 		
+		System.out.println( "start" );
 		long time = System.currentTimeMillis();
 		Event e = findMaxObservable();
+		time = System.currentTimeMillis() - time;
 		printPath( e );
-		System.out.println( "Time taken: " + ( System.currentTimeMillis() - time ) );
+		System.out.println( "Time taken: " + time );
 	}
 	
 	public static Event findMaxObservable() {
+
 		path = new HashMap<Event, Event>();
 		possible = new HashMap<Event, Integer>();
 		possibleInverse = new TreeMap<Integer, HashSet<Event>>();
 		possibleInverse.put( 1, new HashSet<Event>() );
+		toPush = new HashSet<Event>();
 		
-		findPaths();
-		
-		
-		if( possibleInverse.lastEntry().getValue().isEmpty() ) {
-			possibleInverse.remove( possibleInverse.lastKey() );
-		}
-		
-		Event best = null;
-		for( Event e: new HashSet<Event>( possibleInverse.lastEntry().getValue() ) ) {
-			if( check( e ) ) best = e;
-			else pushDown( e );
-		}
-		
-		return best;
-	}
-	
-	public static void findPaths() {
-		
+		// Adds all the events to the possibility hash in reverse order
 		for( int i = events.size() - 1; i >= 0; i-- ) {
 			Event event = events.get( i );
 			int currentMax = possibleInverse.lastKey();
+			// Assume that the next event has the possibility to observe 1 more event than any of the others
 			if( !possibleInverse.get( currentMax ).isEmpty() ) {
 				possibleInverse.put( ++currentMax, new HashSet<Event>() );
 			}
-			possibleInverse.get( currentMax ).add( event );
-			possible.put( event, currentMax );
+			updatePossibility( event, currentMax );
+			// If it not, then we push it down
 			if( !check( event ) ) {
-				pushDown( event );
+				pushDown();
 			}
+		}
+		
+		return getBest();
+	}
+	
+	// Extracts the first event from the possibility hash
+	public static Event getBest() {
+		
+		while( true ) {
+			for( Event e: new HashSet<Event>( possibleInverse.lastEntry().getValue() ) ) {
+				if( check( e ) ) return e;
+				else pushDown();
+			}
+			// since we just recursed through all of the events on this possibility value and didn't return any, it must now be empty
+			possibleInverse.remove( possibleInverse.lastKey() );
 		}
 	}
 	
 	// Checks to see if an event is actually able to achieve its possible value.
-	//  If not, it pushes the event further down the possible stack and returns false
+	//  If not, it stores the event in the toPush hash and returns false
 	public static boolean check( Event current ) {
-		if( path.get( current ) != null ) {
+		if( path.get( current ) != null || possible.get( current ) == 1 ) {
 			return true;
 		}
-		
-		if( possible.get( current ) == 1 ) {
-			path.put( current, current );
-			return true;
+
+		if( toPush.contains( current ) ) {
+			return false;
 		}
 		
-		int currentPossible = possible.get( current );
-		HashSet<Event> toPush = new HashSet<Event>();
-		
-		for( Event e: possibleInverse.get( currentPossible - 1 ) ) {
+		for( Event e: possibleInverse.get( possible.get( current ) - 1 ) ) {
 			if ( canObserveBoth( current, e ) ) {
 				if( check( e ) ) {
 					path.put( current, e );
-					pushDown( toPush );
 					return true;
 				}
 				toPush.add( e );
 			}
 		}
 		
-		pushDown( toPush );
+		toPush.add( current );
 		return false;
 	}
 	
-	public static void pushDown( Collection<Event> events ) {
-		for( Event e: events ) {
-			pushDown( e );
+	// Pushes all of the events down the possibility hash that were found to be in the wrong place
+	public static void pushDown() {
+		for( Event e: toPush ) {
+			updatePossibility( e, possible.get( e ) - 1 );
 		}
+		toPush.clear();
 	}
 	
-	public static void pushDown( Event e ) {
-		possibleInverse.get( possible.get( e ) ).remove( e );
-		possible.put( e, possible.get( e ) - 1 );
-		possibleInverse.get( possible.get( e ) ).add( e );
+	private static void updatePossibility( Event e, int newValue ) {
+		if( possible.get( e ) != null ) {
+			possibleInverse.get( possible.get( e ) ).remove( e );
+		}
+		possibleInverse.get( newValue ).add( e );
+		possible.put( e, newValue );
 	}
 	
 	// Prunes all of the events that are not observable due to the constraint that we must observe the first and last event
@@ -134,19 +136,17 @@ public class Main {
 		for( int i = 0; i < dim; i++ ) {
 			distance += Math.abs( first.coordinates[i] - second.coordinates[i] );
 		}
-		return ( time >= distance );
+		return time >= distance;
 	}
 	
 	public static void printPath( Event e ) {
-		while( !check( e ) ) pushDown( e );
-		
-		System.out.println( e );
-		Event runner = e;
-		
+		while( !check( e ) ) pushDown();
+
 		// output the entire path until we get to the end
-		while( runner != path.get( runner ) ) {
-			runner = path.get( runner );
+		Event runner = e;
+		while( runner != null ) {
 			System.out.println( runner );
+			runner = path.get( runner );
 		}
 		System.out.println( "Path size: " + possible.get( e ) );
 	}
@@ -167,7 +167,7 @@ public class Main {
 			
 			// check for sortedness while reading in our events
 			int time = scanner.nextInt();
-			sorted = sorted && time >= lastTime;
+			sorted = sorted && ( time >= lastTime );
 			lastTime = time;
 			
 			// read in our coordinates
@@ -192,6 +192,7 @@ public class Main {
 		events.sort( comp );
 	}
 	
+	// Writes a sample input
 	public static void writeInput( String filename, int amount, int bound, int dimension ) throws Exception {
 		PrintWriter writer = new PrintWriter( "input/" + filename, "UTF-8" );
 		Random rand = new Random();
@@ -203,6 +204,7 @@ public class Main {
 				writer.print( " " + ( rand.nextInt( bound * 2 ) - bound ) );
 			}
 		}
+		
 		writer.close();
 	}
 	
